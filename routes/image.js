@@ -14,15 +14,13 @@ const publicDir = path.join(process.cwd(), 'public');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir);
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    const name = `${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`;
-    cb(null, name);
-  },
-});
-const upload = multer({ storage });
+// Use in-memory uploads and return base64 data URLs instead of saving files
+const upload = multer({ storage: multer.memoryStorage() });
+
+function toDataUrl(mime, buf) {
+  const b64 = Buffer.isBuffer(buf) ? buf.toString('base64') : Buffer.from(buf).toString('base64');
+  return `data:${mime};base64,${b64}`;
+}
 
 // 去马赛克（Jimp 管线）：放大→均值/高斯平滑→缩回→锐化
 router.post('/de-mosaic', authGuard, upload.single('file'), async (req, res) => {
@@ -31,12 +29,9 @@ router.post('/de-mosaic', authGuard, upload.single('file'), async (req, res) => 
       return res.status(400).json(fail(400, 'invalid params', { field: 'file' }));
     }
     const strength = Math.min(5, Math.max(1, Number(req.body.strength || 2)));
-    const inputPath = req.file.path;
+    const inputBuffer = req.file.buffer;
 
-    const outputName = `demosaic_${Date.now()}.jpg`;
-    const outputPath = path.join(publicDir, outputName);
-
-    const meta = await sharp(inputPath).metadata();
+    const meta = await sharp(inputBuffer).metadata();
     const originalWidth = meta.width || 800;
 
     // 参数映射：强度越大，平滑更强，锐化更弱
@@ -45,7 +40,7 @@ router.post('/de-mosaic', authGuard, upload.single('file'), async (req, res) => 
     const upscale = reqScale > 0 ? Math.min(3, Math.max(1.5, reqScale)) : Math.min(3, 1 + strength * 0.6); // 1.5~3
 
     // 读取并放大
-    const img = await Jimp.read(inputPath);
+    const img = await Jimp.read(inputBuffer);
     const upWidth = Math.round((meta.width || img.bitmap.width) * upscale);
     const upHeight = Math.round((meta.height || img.bitmap.height) * upscale);
     img.resize(upWidth, upHeight, Jimp.RESIZE_CUBIC);
@@ -83,14 +78,14 @@ router.post('/de-mosaic', authGuard, upload.single('file'), async (req, res) => 
     // 先由 Jimp 输出到内存，再用 sharp 做一次“可调 unsharp”提高清晰度
     const sharpness = Math.min(2.5, Math.max(0.8, Number(req.body.sharpness || 1.15)));
     const tmpBuffer = await img.quality(92).getBufferAsync(Jimp.MIME_JPEG);
-    await sharp(tmpBuffer)
+    const outBuf = await sharp(tmpBuffer)
       // sigma 越大越柔和；flat/jagged 越大越锐利。这里根据 sharpness 微调
       .sharpen(1.0, 1.0 * sharpness, 1.2 * sharpness)
       .jpeg({ quality: 92, mozjpeg: true })
-      .toFile(outputPath);
+      .toBuffer();
 
-    const url = `/public/${outputName}`;
-    return res.json(success({ url, width: originalWidth, height: meta.height, params: { strength, upscale, blurRadius, gaussianR, passes, sharpness } }));
+    const dataUrl = toDataUrl('image/jpeg', outBuf);
+    return res.json(success({ base64: dataUrl, width: originalWidth, height: meta.height, params: { strength, upscale, blurRadius, gaussianR, passes, sharpness } }));
   } catch (err) {
     return res.status(500).json(fail(500, 'internal error'));
   }
@@ -103,23 +98,19 @@ router.post('/restore', authGuard, upload.single('file'), async (req, res) => {
       return res.status(400).json(fail(400, 'invalid params', { field: 'file' }));
     }
     const mode = String(req.body.mode || 'auto');
-    const inputPath = req.file.path;
+    const inputBuffer = req.file.buffer;
 
-    const outputName = `restore_${Date.now()}.jpg`;
-    const outputPath = path.join(publicDir, outputName);
-
-    let pipeline = sharp(inputPath).normalize(); // 自动白平衡/对比度
+    let pipeline = sharp(inputBuffer).normalize(); // 自动白平衡/对比度
     if (mode === 'detail') {
       pipeline = pipeline.sharpen(1.2, 1.0, 1.5);
     } else {
       pipeline = pipeline.sharpen(0.6, 1.0, 1.2);
     }
 
-    await pipeline.jpeg({ quality: 92 }).toFile(outputPath);
-
-    const meta = await sharp(outputPath).metadata();
-    const url = `/public/${outputName}`;
-    return res.json(success({ url, width: meta.width, height: meta.height }));
+    const outBuf = await pipeline.jpeg({ quality: 92 }).toBuffer();
+    const meta = await sharp(outBuf).metadata();
+    const dataUrl = toDataUrl('image/jpeg', outBuf);
+    return res.json(success({ base64: dataUrl, width: meta.width, height: meta.height }));
   } catch (err) {
     return res.status(500).json(fail(500, 'internal error'));
   }
@@ -143,11 +134,8 @@ router.post('/de-watermark', authGuard, upload.single('file'), async (req, res) 
       // ignore parse error
     }
 
-    const inputPath = req.file.path;
-    const outputName = `dew_${Date.now()}.jpg`;
-    const outputPath = path.join(publicDir, outputName);
-
-    const img = await Jimp.read(inputPath);
+    const inputBuffer = req.file.buffer;
+    const img = await Jimp.read(inputBuffer);
     const { width, height } = img.bitmap;
 
     const pad = Math.round(4 + strength * 3); // 更大扩展，获取更多上下文
@@ -239,10 +227,9 @@ router.post('/de-watermark', authGuard, upload.single('file'), async (req, res) 
 
     // 可选轻锐化，恢复边缘
     const tmp = await img.quality(92).getBufferAsync(Jimp.MIME_JPEG);
-    await sharp(tmp).sharpen(1.0, 0.9, 1.1).jpeg({ quality: 92, mozjpeg: true }).toFile(outputPath);
-
-    const url = `/public/${outputName}`;
-    return res.json(success({ url, width, height, params: { mode, strength, feather, hasMask: maskRects.length > 0 } }));
+    const outBuf = await sharp(tmp).sharpen(1.0, 0.9, 1.1).jpeg({ quality: 92, mozjpeg: true }).toBuffer();
+    const dataUrl = toDataUrl('image/jpeg', outBuf);
+    return res.json(success({ base64: dataUrl, width, height, params: { mode, strength, feather, hasMask: maskRects.length > 0 } }));
   } catch (err) {
     return res.status(500).json(fail(500, 'internal error'));
   }
