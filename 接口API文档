@@ -1,0 +1,146 @@
+接口 API 文档
+
+一、概述
+- 使用 Node.js 构建的管理端 API 服务。
+- 当前阶段的账号密码为写死测试账号：
+  - 账号：admin、editor
+  - 密码：123456
+- 鉴权说明：登录成功后返回加密的 token。
+  - token 使用 JWT 生成签名（服务端可验证与解析）。
+  - 同时对 JWT 字符串计算 MD5 摘要，便于快速一致性校验（可选）。
+
+二、统一返回格式
+- 所有接口统一返回：
+  {code: 200, message: 'success', data: {}}
+- 约定：
+  - code：数值型状态码（200 表示成功；其他业务错误可扩展如 400/401/500 等）。
+  - message：对结果的简要说明。
+  - data：具体业务数据对象。
+
+三、认证与安全
+- 登录成功后，服务端返回字段：
+  - token：JWT 字符串。
+  - tokenMd5：对 token 进行 MD5 后的摘要值（用于快速校验，可选返回）。
+- 客户端在调用需鉴权接口时，应在请求头中携带：
+  - Authorization: Bearer <token>
+
+四、接口列表
+
+1) 用户登录
+- 方法与路径：POST /api/auth/login
+- 请求体（JSON）：
+  {
+    "username": "admin | editor",
+    "password": "123456"
+  }
+- 业务规则：
+  - 服务端基于写死的账号密码进行校验（admin/editor + 123456）。
+  - 校验通过后生成 JWT，并可附带 MD5 摘要。
+- 成功响应：
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "token": "<JWT 字符串>",
+      "tokenMd5": "<JWT 的 MD5 摘要，可选>"
+    }
+  }
+
+2) 用户退出
+- 方法与路径：POST /api/auth/logout
+- 请求头：
+  - Authorization: Bearer <token>
+- 业务规则：
+  - 将当前 token 作注销处理（如加入黑名单或更新会话态）。
+  - 按需求返回签名 token 信息（若需给前端进行比对/清理，可返回同结构）。
+- 成功响应：
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "token": "<JWT 字符串>",
+      "tokenMd5": "<JWT 的 MD5 摘要，可选>"
+    }
+  }
+
+3) 图片修复马赛克
+- 方法与路径：POST /api/image/de-mosaic
+- 鉴权：需要（Authorization: Bearer <token>）。
+- 请求方式：multipart/form-data
+  - file：需要修复的图片文件。
+  - strength（可选，number）：去马赛克力度，默认中等。
+- 成功响应（示例）：
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "url": "https://.../restored.jpg",
+      "width": 1920,
+      "height": 1080
+    }
+  }
+
+4) 旧图片修复
+- 方法与路径：POST /api/image/restore
+- 鉴权：需要（Authorization: Bearer <token>）。
+- 请求方式：multipart/form-data
+  - file：需要修复的旧照片或低质量图片。
+  - mode（可选，string）：修复模式，如 "auto"、"detail"。
+- 成功响应（示例）：
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "url": "https://.../enhanced.jpg",
+      "width": 2048,
+      "height": 2048
+    }
+  }
+
+5) 图片去水印
+- 方法与路径：POST /api/image/de-watermark
+- 鉴权：需要（Authorization: Bearer <token>）。
+- 请求方式：multipart/form-data
+  - file：需要去除水印的图片文件。
+  - mode（可选，string）：去水印模式，支持 "inpaint"（修复填充，默认）或 "blur"（模糊）。
+  - mask（可选，string）：JSON 字符串，指定水印区域数组，形如：
+    [{"x":100,"y":120,"width":200,"height":60}]
+  - strength（可选，number）：处理力度 1-5，默认 3。
+- 说明：未提供 mask 时，服务端将尝试进行简易检测，可能不精准，建议前端传入明确区域。
+- 成功响应（示例）：
+  {
+    "code": 200,
+    "message": "success",
+    "data": {
+      "url": "https://.../de-watermark.jpg",
+      "width": 1920,
+      "height": 1080
+    }
+  }
+
+五、错误码与示例
+- 401 未授权：
+  {
+    "code": 401,
+    "message": "unauthorized",
+    "data": {}
+  }
+- 400 参数错误：
+  {
+    "code": 400,
+    "message": "invalid params",
+    "data": {"field": "username"}
+  }
+- 500 服务端错误：
+  {
+    "code": 500,
+    "message": "internal error",
+    "data": {}
+  }
+
+六、备注
+- 当前账号密码仅用于联调阶段，后续应替换为真实用户体系。
+- 生产环境下，建议：
+  - 为 JWT 设置合理过期时间与刷新机制。
+  - 使用 HTTPS 保障传输安全。
+  - 若返回 MD5，仅作快速一致性校验，不作为安全凭证。

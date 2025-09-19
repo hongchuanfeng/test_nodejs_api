@@ -1,0 +1,14 @@
+使用node.js 作为技术框架，写一个api服务。
+
+api 接口有：
+
+1、用户登录接口，接口先写死账号密码，admin和editor，密码都是123456，登录成功后返回token，接口要返回token，token要加密，使用jwt加密，使用md5加密。
+
+2、用户退出接口，接口先写死账号密码，admin和editor，密码都是123456，退出成功后返回token，接口要返回token，token要加密，使用jwt加密，使用md5加密。
+
+3、使用node.js 写一个图片修复马赛克接口
+
+4、使用node.js 写一个旧图片修复接口
+
+
+接口统一返回格式为：{code: 200, message: 'success', data: {}}
