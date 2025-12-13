@@ -1,0 +1,28 @@
+# .github/workflows/cron.yml
+name: 定时触发 removewatermarkAPI
+# 触发规则：定时 + 手动触发（方便测试）
+on:
+  schedule:
+    # Cron 表达式（UTC 时区），每小时整点执行
+    # 北京时间 = UTC + 8，若需北京时间每小时执行，改为 0 */1 * * *（UTC 每小时 → 北京时间+8小时）
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # 手动触发开关（可选，便于测试）
+
+# 执行任务
+jobs:
+  run-cron-task:
+    # 运行环境（推荐 ubuntu-latest）
+    runs-on: ubuntu-latest
+    steps:
+      # 步骤1：打印执行时间（可选，便于日志排查）
+      - name: 打印执行时间
+        run: echo "当前执行时间：$(date)"
+
+      # 步骤2：调用 Vercel API（核心逻辑）
+      - name: 触发 Vercel Cron 接口
+        run: |
+          curl -X GET "https://removewatermark.zorezoro.com/api/cron/keepalive" \
+          --connect-timeout 10 \
+          --max-time 30
+        # 环境变量说明：
+        # CRON_SECRET 是存储在 GitHub 仓库的密钥，需提前配置（步骤3）
